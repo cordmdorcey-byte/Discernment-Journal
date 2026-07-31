@@ -138,14 +138,25 @@ async function pushCloud(){
 /* debounced save so rapid taps don't spam the API */
 function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(pushCloud, 700); }
 
+/* True while the user is mid-edit: a field is focused, or a story draft is unsaved. */
+let composerDraft = false;   // set by the composer when text/photo is entered
+function isEditing(){
+  const a = document.activeElement;
+  const focused = a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT");
+  return focused || composerDraft;
+}
+
 /* pull fresh data periodically so spouses see each other's work */
 async function refresh(){
   if(!configured()) return;
+  if(isEditing()) return;   // never yank the page out from under someone who's writing
   try{
     const r = await fetch(BASE + "/latest", { headers:{ [AUTH_HEADER]: API_KEY }});
     if(!r.ok) return;
     const j = await r.json();
     if(j.record && Array.isArray(j.record.places) && j.record.places.length > 0){
+      // Re-check right before we replace the page — a field may have been focused during the fetch.
+      if(isEditing()) return;
       STATE = j.record;
       if(!Array.isArray(STATE.board)) STATE.board = [];
       render();
@@ -303,18 +314,21 @@ function scaleRow(p, crit){
 
 function composer(p){
   let img = null;
+  composerDraft = false;   // fresh composer starts clean
+  const updateDraft = ()=>{ composerDraft = !!(ta.value.trim() || img); };
   const ta = el("textarea",{rows:"3",placeholder:"What did you notice here? An impression, a conversation, a moment at Mass…",
     style:{width:"100%",resize:"vertical",border:"none",background:"transparent",fontSize:"15px",lineHeight:"1.5",color:"var(--ink)",outline:"none"}});
+  ta.addEventListener("input", updateDraft);
   const preview = el("div",{style:{marginTop:"8px"}});
   const fileInput = el("input",{type:"file",accept:"image/*",style:{display:"none"}});
   fileInput.addEventListener("change", e=>{
     const f = e.target.files?.[0]; if(!f) return;
     const rd = new FileReader();
-    rd.onload = ()=>{ img = rd.result; preview.innerHTML="";
+    rd.onload = ()=>{ img = rd.result; updateDraft(); preview.innerHTML="";
       const wrap = el("div",{style:{position:"relative",display:"inline-block"}},
         el("img",{src:img,style:{maxHeight:"140px",borderRadius:"8px",display:"block"}}),
         el("button",{style:{position:"absolute",top:"6px",right:"6px",background:"var(--ink)",color:"var(--paper)",border:"none",borderRadius:"999px",width:"24px",height:"24px"},
-          onClick:()=>{img=null;preview.innerHTML="";}}, "✕"));
+          onClick:()=>{img=null;updateDraft();preview.innerHTML="";}}, "✕"));
       preview.append(wrap);
     };
     rd.readAsDataURL(f);
@@ -323,6 +337,7 @@ function composer(p){
   const submit = ()=>{
     const text = ta.value.trim();
     if(!text && !img) return;
+    composerDraft = false;   // draft is being committed
     p.entries.unshift({ id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())), text, image:img, author:ME, createdAt:Date.now() });
     save(); render();
   };
