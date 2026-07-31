@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Our Discernment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=Caveat:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* Sage-anchored warm cream — a handwritten journal */
+    --paper:#F7F2E7;        /* soft cream page */
+    --paperDeep:#EFE8D6;    /* card / raised paper */
+    --ink:#3A362B;          /* soft warm black ink */
+    --inkSoft:#8A7F6A;      /* faded pencil */
+    --sage:#7C8A66;         /* the anchor: soft sage */
+    --sageDeep:#5E6B4A;     /* deep sage for emphasis */
+    --clay:#C08552;         /* warm accent, used sparingly */
+    --rule:#E2D8BF;         /* ruled-line color */
+    --line:#DDD2B6;         /* hairline borders */
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  body{
+    margin:0;color:var(--ink);font-family:Inter,system-ui,sans-serif;
+    background-color:var(--paper);
+  }
+  .wrap{max-width:720px;margin:0 auto;padding:0 22px 90px;}
+  h1,h2,.serif{font-family:Fraunces,Georgia,serif;font-weight:600;}
+  .script{font-family:Caveat,'Segoe Script',cursive;}
+  button{font-family:Inter,sans-serif;cursor:pointer;}
+  button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--sage);outline-offset:2px;}
+  ::placeholder{color:var(--inkSoft);opacity:.6;font-style:italic;}
+  input,textarea{font-family:Inter,sans-serif;}
+  .navbtn{background:none;border:none;color:var(--inkSoft);font-size:14px;padding:0;}
+  .navbtn.active{color:var(--sageDeep);font-weight:600;}
+  .linkbtn{background:none;border:none;color:var(--sageDeep);padding:0;font-size:12.5px;font-weight:600;}
+  /* cards look like little pieces of paper, softly lifted */
+  .card{background:var(--paperDeep);border:1px solid var(--line);border-radius:10px;box-shadow:0 1px 2px rgba(90,80,55,.06),0 6px 16px rgba(90,80,55,.05);}
+  .primary{background:var(--sage);color:#FBF8EF;border:none;border-radius:999px;padding:10px 20px;font-size:13.5px;font-weight:600;box-shadow:0 2px 6px rgba(94,107,74,.25);}
+  .seg{flex:1;height:40px;border:1.5px solid var(--line);background:transparent;color:var(--inkSoft);border-radius:999px;font-family:Fraunces,serif;font-size:15px;transition:all .18s ease;}
+  .seg.on{background:var(--sage);border-color:var(--sage);color:#FBF8EF;box-shadow:0 1px 4px rgba(94,107,74,.3);}
+  .whopill{border:1.5px solid var(--sage);background:transparent;color:var(--sageDeep);border-radius:999px;padding:7px 16px;font-size:13px;font-weight:600;}
+  .whopill.on{background:var(--sage);color:#FBF8EF;}
+  table{border-collapse:collapse;width:100%;min-width:520px;}
+  th,td{padding:10px;border-bottom:1px solid var(--paperDeep);}
+  th{font-size:12px;color:var(--inkSoft);font-weight:500;border-bottom:1px solid var(--line);text-align:center;}
+  .status{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--sageDeep);color:#FBF8EF;font-size:12px;padding:9px 18px;border-radius:999px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:50;box-shadow:0 4px 14px rgba(60,54,43,.25);}
+  .status.show{opacity:.96;}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
+</style>
+</head>
+<body>
+<div id="root" class="wrap"></div>
+<div id="status" class="status"></div>
+
+<script>
+/* ============================================================
+   CONFIG — paste your JSONBin details here (instructions below)
+   ============================================================ */
+const BIN_ID  = "6a6bc98df5f4af5e29d7af69";
+const API_KEY = "$2a$10$/zXxPU4AccL.MH1DkhyLmeK0SsgWZhOTApfGuy8zwKwXb7i0xACfm";
+// Scoped access keys use "X-Access-Key"; a full master key uses "X-Master-Key".
+const AUTH_HEADER = "X-Access-Key";
+/* ============================================================ */
+
+const MISSION = "We exist to love God and glorify him in our marriage by raising a family and sanctifying the world.";
+const PEOPLE = ["Husband", "Wife"];
+const CRITERIA = [
+  { key:"culture", label:"Culture", hint:"The character and rhythm of daily life here." },
+  { key:"beauty", label:"Beauty", hint:"Land, architecture, and the sense of a place worth loving." },
+  { key:"church", label:"Catholic Church", hint:"Parish life, reverence, sacraments, community of faith." },
+  { key:"affordability", label:"Affordability", hint:"Can a family live and grow here without strain?" },
+  { key:"business", label:"Business Viability", hint:"Room to work, build, and provide." },
+  { key:"community", label:"Community", hint:"Neighbors, friendship, belonging." },
+  { key:"amenities", label:"Amenities", hint:"The practical goods of a settled life." },
+  { key:"lifestyle", label:"Lifestyle", hint:"The shape of the life you'd actually live." },
+];
+const SEED = [
+  { id:"boise", name:"Boise", region:"Idaho" },
+  { id:"greenville-sc", name:"Greenville", region:"South Carolina" },
+  { id:"greenville-tx", name:"Greenville", region:"Texas" },
+];
+
+/* ---------- who am I (per device) ---------- */
+let ME = localStorage.getItem("discern:me") || null;
+function setMe(n){ ME = n; localStorage.setItem("discern:me", n); }
+
+/* ---------- cloud storage (JSONBin) ---------- */
+const BASE = "https://api.jsonbin.io/v3/b/" + BIN_ID;
+const configured = () => BIN_ID && !BIN_ID.includes("PASTE") && API_KEY && !API_KEY.includes("PASTE");
+
+let STATE = null;
+let saveTimer = null;
+
+function blankPlace(loc){ return { ...loc, scores:{}, entries:[], board:[] }; }
+function freshState(){ return { places: SEED.map(blankPlace), board: [] }; }
+
+function toast(msg){
+  const s = document.getElementById("status");
+  s.textContent = msg; s.classList.add("show");
+  clearTimeout(s._t); s._t = setTimeout(()=>s.classList.remove("show"), 1600);
+}
+
+async function loadCloud(){
+  if(!configured()){ STATE = freshState(); return; }
+  try{
+    const r = await fetch(BASE + "/latest", { headers:{ [AUTH_HEADER]: API_KEY }});
+    if(!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    STATE = (j.record && j.record.places) ? j.record : freshState();
+  }catch(e){
+    console.error(e); STATE = freshState();
+    toast("Couldn't reach the cloud — working offline");
+  }
+}
+
+async function pushCloud(){
+  if(!configured()) return;
+  try{
+    const r = await fetch(BASE, {
+      method:"PUT",
+      headers:{ "Content-Type":"application/json", [AUTH_HEADER]: API_KEY },
+      body: JSON.stringify(STATE),
+    });
+    if(!r.ok) throw new Error(r.status);
+    toast("Saved");
+  }catch(e){ console.error(e); toast("Save failed — check connection"); }
+}
+
+/* debounced save so rapid taps don't spam the API */
+function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(pushCloud, 700); }
+
+/* pull fresh data periodically so spouses see each other's work */
+async function refresh(){
+  if(!configured()) return;
+  try{
+    const r = await fetch(BASE + "/latest", { headers:{ [AUTH_HEADER]: API_KEY }});
+    if(!r.ok) return;
+    const j = await r.json();
+    if(j.record && j.record.places){ STATE = j.record; render(); }
+  }catch(e){/* ignore */}
+}
+
+/* ---------- helpers ---------- */
+const el = (tag, props={}, ...kids) => {
+  const n = document.createElement(tag);
+  for(const k in props){
+    if(k==="style") Object.assign(n.style, props[k]);
+    else if(k.startsWith("on")) n.addEventListener(k.slice(2).toLowerCase(), props[k]);
+    else if(k==="class") n.className = props[k];
+    else if(k==="html") n.innerHTML = props[k];
+    else n.setAttribute(k, props[k]);
+  }
+  for(const kid of kids.flat()){ if(kid==null||kid===false) continue; n.append(kid.nodeType?kid:document.createTextNode(kid)); }
+  return n;
+};
+const place = id => STATE.places.find(p=>p.id===id);
+
+/* average of a criterion across both people */
+function critAvg(p, key){
+  const vals = PEOPLE.map(who => p.scores?.[key]?.[who]?.value).filter(v=>v>0);
+  if(!vals.length) return null;
+  return vals.reduce((a,b)=>a+b,0)/vals.length;
+}
+/* overall average for a place (average of the per-criterion combined averages) */
+function placeAvg(p){
+  const vals = CRITERIA.map(c=>critAvg(p,c.key)).filter(v=>v!=null);
+  if(!vals.length) return null;
+  return vals.reduce((a,b)=>a+b,0)/vals.length;
+}
+
+/* ---------- views ---------- */
+let VIEW = { name:"home" };
+let dragId = null;
+
+function frame(){
+  return el("div",{style:{padding:"36px 0 24px",borderBottom:"1.5px solid var(--line)"}},
+    el("div",{class:"script",style:{color:"var(--clay)",fontSize:"22px",fontWeight:"600"}}, "Our Discernment"),
+    el("p",{class:"script",style:{fontSize:"32px",lineHeight:"1.3",margin:"6px 0 0",color:"var(--sageDeep)"}}, "\u201C"+MISSION+"\u201D"),
+    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",marginTop:"10px",fontStyle:"italic"}}, "Every score and story below is weighed against this end."),
+  );
+}
+
+function backBar(){
+  return el("button",{class:"navbtn",style:{display:"flex",alignItems:"center",gap:"5px",padding:"22px 0 4px",color:"var(--sage)",fontWeight:"600"},
+    onClick:()=>{VIEW={name:"home"};render();}}, "‹ All places");
+}
+function sectionLabel(t){
+  return el("div",{class:"script",style:{marginTop:"38px",marginBottom:"2px",fontSize:"26px",color:"var(--clay)"}}, t);
+}
+
+/* who-picker gate */
+function whoGate(){
+  const root = document.getElementById("root");
+  root.innerHTML = "";
+  root.append(
+    frame(),
+    el("div",{style:{marginTop:"40px",textAlign:"center"}},
+      el("div",{class:"script",style:{fontSize:"40px",marginBottom:"2px",color:"var(--sageDeep)"}}, "Who's discerning?"),
+      el("div",{style:{fontSize:"14px",color:"var(--inkSoft)",marginBottom:"24px"}}, "This device will remember your choice."),
+      el("div",{style:{display:"flex",gap:"14px",justifyContent:"center"}},
+        ...PEOPLE.map(n => el("button",{class:"whopill",style:{padding:"14px 30px",fontSize:"16px"},
+          onClick:()=>{ setMe(n); render(); }}, n))
+      )
+    )
+  );
+}
+
+function home(){
+  const ranked = [...STATE.places].sort((a,b)=>(placeAvg(b)??-1)-(placeAvg(a)??-1));
+  const root = document.getElementById("root"); root.innerHTML="";
+  root.append(
+    frame(),
+    el("nav",{style:{display:"flex",gap:"18px",padding:"18px 0",fontSize:"14px",alignItems:"center"}},
+      el("span",{class:"navbtn active"}, "Places"),
+      el("button",{class:"navbtn",onClick:()=>{VIEW={name:"compare"};render();}}, "At a glance"),
+      el("button",{class:"navbtn",onClick:()=>{VIEW={name:"board"};render();}}, "Story board"),
+      el("span",{style:{marginLeft:"auto",fontSize:"12.5px",color:"var(--sage)"}},
+        "You are "+ME+" ",
+        el("button",{class:"linkbtn",style:{fontSize:"12px"},onClick:()=>{localStorage.removeItem("discern:me");render();}}, "· switch")
+      )
+    ),
+    el("div",{style:{display:"grid",gap:"16px",marginTop:"6px"}},
+      ...ranked.map(p=>{
+        const a = placeAvg(p);
+        const rated = CRITERIA.filter(c=>critAvg(p,c.key)!=null).length;
+        return el("button",{class:"card",style:{textAlign:"left",padding:"20px 22px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"16px"},
+          onClick:()=>{VIEW={name:"place",id:p.id};render();}},
+          el("div",{},
+            el("div",{class:"script",style:{fontSize:"34px",lineHeight:"1",color:"var(--ink)"}}, p.name),
+            el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, p.region),
+            el("div",{style:{fontSize:"12.5px",color:"var(--sage)",marginTop:"8px"}},
+              p.entries.length+" "+(p.entries.length===1?"story":"stories")+" · "+rated+"/8 rated"),
+          ),
+          el("div",{style:{textAlign:"center"}},
+            el("div",{class:"serif",style:{fontSize:"40px",lineHeight:"1",color:a?"var(--sage)":"var(--line)"}}, a?a.toFixed(1):"—"),
+            el("div",{style:{fontSize:"10px",letterSpacing:"2px",color:"var(--inkSoft)",textTransform:"uppercase",marginTop:"4px"}}, "of 7")
+          )
+        );
+      })
+    )
+  );
+}
+
+function scaleRow(p, crit){
+  const mine = p.scores?.[crit.key]?.[ME] || {};
+  const other = PEOPLE.find(n=>n!==ME);
+  const theirs = p.scores?.[crit.key]?.[other] || {};
+  const a = critAvg(p, crit.key);
+
+  const setVal = (n) => {
+    p.scores[crit.key] = p.scores[crit.key] || {};
+    p.scores[crit.key][ME] = { ...mine, value: (mine.value===n?0:n) };
+    save(); render();
+  };
+  const setNote = (v) => {
+    p.scores[crit.key] = p.scores[crit.key] || {};
+    p.scores[crit.key][ME] = { ...(p.scores[crit.key][ME]||{}), note:v };
+    save();
+  };
+
+  const segs = el("div",{style:{display:"flex",gap:"6px",marginTop:"12px"}});
+  for(let n=1;n<=7;n++){
+    segs.append(el("button",{class:"seg"+(n<=(mine.value||0)?" on":""),onClick:()=>setVal(n),"aria-label":crit.label+" "+n+" of 7"}, String(n)));
+  }
+
+  const noteInput = el("input",{value:mine.note||"",placeholder:"Your note on why…",
+    style:{marginTop:"10px",width:"100%",background:"transparent",border:"none",borderBottom:"1px dashed var(--line)",padding:"6px 2px",fontSize:"14px",color:"var(--ink)",outline:"none"}});
+  noteInput.addEventListener("input", e=>setNote(e.target.value));
+
+  const badges = el("div",{style:{display:"flex",gap:"14px",marginTop:"10px",fontSize:"12.5px",flexWrap:"wrap"}},
+    el("span",{style:{color:"var(--inkSoft)"}}, "You: ",
+      el("b",{style:{color:mine.value?"var(--sage)":"var(--line)",fontFamily:"Fraunces,serif",fontSize:"15px"}}, mine.value||"—")),
+    el("span",{style:{color:"var(--inkSoft)"}}, other+": ",
+      el("b",{style:{color:theirs.value?"var(--sage)":"var(--line)",fontFamily:"Fraunces,serif",fontSize:"15px"}}, theirs.value||"—")),
+    el("span",{style:{color:"var(--inkSoft)",marginLeft:"auto"}}, "Combined: ",
+      el("b",{style:{color:a?"var(--sageDeep)":"var(--line)",fontFamily:"Fraunces,serif",fontSize:"15px"}}, a?a.toFixed(1):"—")),
+  );
+
+  return el("div",{style:{padding:"18px 0",borderBottom:"1px solid var(--line)"}},
+    el("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:"12px"}},
+      el("div",{},
+        el("div",{class:"serif",style:{fontSize:"19px"}}, crit.label),
+        el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",marginTop:"2px"}}, crit.hint)
+      )
+    ),
+    segs, badges, noteInput,
+    theirs.note ? el("div",{style:{fontSize:"12.5px",color:"var(--sage)",marginTop:"6px",fontStyle:"italic"}}, other+" noted: \u201C"+theirs.note+"\u201D") : null
+  );
+}
+
+function composer(p){
+  let img = null;
+  const ta = el("textarea",{rows:"3",placeholder:"What did you notice here? An impression, a conversation, a moment at Mass…",
+    style:{width:"100%",resize:"vertical",border:"none",background:"transparent",fontSize:"15px",lineHeight:"1.5",color:"var(--ink)",outline:"none"}});
+  const preview = el("div",{style:{marginTop:"8px"}});
+  const fileInput = el("input",{type:"file",accept:"image/*",style:{display:"none"}});
+  fileInput.addEventListener("change", e=>{
+    const f = e.target.files?.[0]; if(!f) return;
+    const rd = new FileReader();
+    rd.onload = ()=>{ img = rd.result; preview.innerHTML="";
+      const wrap = el("div",{style:{position:"relative",display:"inline-block"}},
+        el("img",{src:img,style:{maxHeight:"140px",borderRadius:"8px",display:"block"}}),
+        el("button",{style:{position:"absolute",top:"6px",right:"6px",background:"var(--ink)",color:"var(--paper)",border:"none",borderRadius:"999px",width:"24px",height:"24px"},
+          onClick:()=>{img=null;preview.innerHTML="";}}, "✕"));
+      preview.append(wrap);
+    };
+    rd.readAsDataURL(f);
+  });
+
+  const submit = ()=>{
+    const text = ta.value.trim();
+    if(!text && !img) return;
+    p.entries.unshift({ id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())), text, image:img, author:ME, createdAt:Date.now() });
+    save(); render();
+  };
+
+  return el("div",{class:"card",style:{padding:"14px"}},
+    ta, preview,
+    el("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:"10px"}},
+      el("label",{class:"linkbtn",style:{display:"inline-flex",alignItems:"center",gap:"6px",cursor:"pointer"}}, "▣ Add picture", fileInput),
+      el("button",{class:"primary",onClick:submit}, "＋ Save story")
+    )
+  );
+}
+
+function placeView(){
+  const p = place(VIEW.id);
+  const root = document.getElementById("root"); root.innerHTML="";
+  root.append(
+    backBar(),
+    el("div",{style:{padding:"8px 0 20px",borderBottom:"1.5px solid var(--line)"}},
+      el("div",{class:"script",style:{fontSize:"52px",lineHeight:"1",color:"var(--ink)"}}, p.name),
+      el("div",{style:{fontSize:"14px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, p.region),
+      el("div",{style:{fontSize:"12.5px",color:"var(--sageDeep)",fontStyle:"italic",marginTop:"14px"}}, "Held against: "+MISSION.toLowerCase())
+    ),
+    sectionLabel("How it feels, 1 to 7"),
+    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"2px",marginBottom:"4px"}}, "You're writing as "+ME+"."),
+    ...CRITERIA.map(c=>scaleRow(p,c)),
+    sectionLabel("Stories & impressions"),
+    composer(p),
+    el("div",{style:{display:"grid",gap:"14px",marginTop:"18px"}},
+      p.entries.length===0 ? el("div",{style:{color:"var(--inkSoft)",fontSize:"14px",fontStyle:"italic"}}, "No stories yet. Write what you saw, felt, or heard on a visit.") : null,
+      ...p.entries.map(e=>{
+        const onBoard = STATE.board.some(b=>b.entryId===e.id);
+        return el("article",{class:"card",style:{overflow:"hidden"}},
+          e.image ? el("img",{src:e.image,alt:"",style:{width:"100%",maxHeight:"260px",objectFit:"cover",display:"block"}}) : null,
+          el("div",{style:{padding:"14px 16px"}},
+            el("div",{style:{fontSize:"11px",letterSpacing:"1.5px",textTransform:"uppercase",color:"var(--sage)",fontWeight:"600",marginBottom:"6px"}}, (e.author||"—")+"'s note"),
+            el("p",{style:{margin:"0",fontSize:"15px",lineHeight:"1.55"}}, e.text),
+            el("div",{style:{display:"flex",gap:"14px",marginTop:"12px"}},
+              el("button",{class:"linkbtn",onClick:()=>{ if(!onBoard){STATE.board.push({entryId:e.id,placeId:p.id});save();render();} }},
+                onBoard?"✓ On board":"＋ Add to board"),
+              el("button",{class:"linkbtn",style:{color:"var(--sageDeep)"},onClick:()=>{
+                p.entries=p.entries.filter(x=>x.id!==e.id);
+                STATE.board=STATE.board.filter(b=>b.entryId!==e.id);
+                save();render();
+              }}, "🗑 Remove")
+            )
+          )
+        );
+      })
+    )
+  );
+}
+
+function compareView(){
+  const root=document.getElementById("root"); root.innerHTML="";
+  const head = el("tr",{}, el("th",{style:{textAlign:"left"}},""),
+    ...STATE.places.map(p=>el("th",{class:"serif",style:{fontWeight:"600"}}, p.name, el("div",{style:{fontSize:"11px",color:"var(--inkSoft)",fontWeight:"400"}}, p.region))));
+  const body = el("tbody",{});
+  CRITERIA.forEach(c=>{
+    const vals = STATE.places.map(p=>critAvg(p,c.key)??0);
+    const best = Math.max(...vals);
+    const row = el("tr",{}, el("td",{style:{fontSize:"13.5px",textAlign:"left"}}, c.label));
+    STATE.places.forEach((p,i)=>{
+      const v=vals[i], lead=v>0&&v===best;
+      row.append(el("td",{},
+        el("div",{style:{display:"inline-flex",flexDirection:"column",alignItems:"center",width:"64px"}},
+          el("div",{class:"serif",style:{fontSize:"17px",color:v?(lead?"var(--sageDeep)":"var(--ink)"):"var(--line)",fontWeight:lead?"600":"400"}}, v?v.toFixed(1):"—"),
+          el("div",{style:{height:"5px",width:"100%",background:"var(--line)",borderRadius:"3px",marginTop:"4px",overflow:"hidden"}},
+            el("div",{style:{height:"100%",width:((v/7)*100)+"%",background:lead?"var(--sage)":"var(--sage)"}}))
+        )));
+    });
+    body.append(row);
+  });
+  const overall = STATE.places.map(p=>placeAvg(p)??-1);
+  const oBest = Math.max(...overall);
+  const oRow = el("tr",{}, el("td",{class:"serif",style:{fontSize:"15px",textAlign:"left",borderTop:"2px solid var(--sage)"}}, "Overall"));
+  STATE.places.forEach((p,i)=>{
+    const a=placeAvg(p), lead=a!=null&&a===oBest;
+    oRow.append(el("td",{style:{borderTop:"2px solid var(--sage)"}},
+      el("span",{class:"serif",style:{fontSize:"28px",color:a?(lead?"var(--sageDeep)":"var(--ink)"):"var(--line)"}}, a?a.toFixed(1):"—")));
+  });
+  body.append(oRow);
+
+  root.append(
+    backBar(),
+    el("div",{style:{padding:"8px 0 18px",borderBottom:"1.5px solid var(--line)"}},
+      el("div",{class:"script",style:{fontSize:"46px",color:"var(--sageDeep)"}}, "At a Glance"),
+      el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, "Combined scores, side by side. The deepest bar leads.")),
+    el("div",{style:{overflowX:"auto",marginTop:"18px"}}, el("table",{}, el("thead",{},head), body))
+  );
+}
+
+function boardView(){
+  const root=document.getElementById("root"); root.innerHTML="";
+  const cards = STATE.board.map(b=>{
+    const p=place(b.placeId); const e=p&&p.entries.find(x=>x.id===b.entryId);
+    return e?{...e,place:p}:null;
+  }).filter(Boolean);
+
+  const list = el("div",{style:{display:"grid",gap:"14px",marginTop:"20px"}});
+  if(cards.length===0){
+    list.append(el("div",{style:{marginTop:"10px",color:"var(--inkSoft)",fontStyle:"italic"}},
+      "The board is empty. Open a place and tap \u201CAdd to board\u201D on a story to begin building the narrative."));
+  }
+  cards.forEach(c=>{
+    const cardEl = el("div",{class:"card",draggable:"true",style:{display:"flex",gap:"12px",padding:"12px",alignItems:"flex-start",cursor:"grab"}},
+      el("span",{style:{color:"var(--inkSoft)",marginTop:"2px",flexShrink:"0"}}, "⠿"),
+      c.image?el("img",{src:c.image,alt:"",style:{width:"84px",height:"84px",objectFit:"cover",borderRadius:"8px",flexShrink:"0"}}):null,
+      el("div",{style:{flex:"1",minWidth:"0"}},
+        el("div",{style:{fontSize:"11px",letterSpacing:"1.5px",textTransform:"uppercase",color:"var(--sage)",fontWeight:"600"}}, c.place.name+", "+c.place.region+" · "+(c.author||"")),
+        el("p",{style:{margin:"5px 0 0",fontSize:"14px",lineHeight:"1.5"}}, c.text)),
+      el("button",{class:"linkbtn",style:{flexShrink:"0"},onClick:()=>{STATE.board=STATE.board.filter(b=>b.entryId!==c.id);save();render();}}, "✕")
+    );
+    cardEl.addEventListener("dragstart",()=>dragId=c.id);
+    cardEl.addEventListener("dragover",e=>e.preventDefault());
+    cardEl.addEventListener("drop",()=>{
+      if(dragId&&dragId!==c.id){
+        const arr=STATE.board;
+        const from=arr.findIndex(b=>b.entryId===dragId);
+        const to=arr.findIndex(b=>b.entryId===c.id);
+        const [m]=arr.splice(from,1); arr.splice(to,0,m); save(); render();
+      }
+      dragId=null;
+    });
+    list.append(cardEl);
+  });
+
+  root.append(
+    backBar(),
+    el("div",{style:{padding:"8px 0 18px",borderBottom:"1.5px solid var(--line)"}},
+      el("div",{class:"script",style:{fontSize:"46px",color:"var(--sageDeep)"}}, "Story Board"),
+      el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, "Drag to arrange the narrative. Add pieces from any place.")),
+    list
+  );
+}
+
+/* ---------- render dispatch ---------- */
+function render(){
+  if(!STATE){ return; }
+  if(!ME){ whoGate(); return; }
+  if(VIEW.name==="home") home();
+  else if(VIEW.name==="place") placeView();
+  else if(VIEW.name==="compare") compareView();
+  else if(VIEW.name==="board") boardView();
+}
+
+/* ---------- boot ---------- */
+(async function(){
+  document.getElementById("root").innerHTML =
+    '<div style="min-height:60vh;display:grid;place-items:center;color:var(--inkSoft);font-family:Fraunces,serif;">Opening the journal…</div>';
+  await loadCloud();
+  render();
+  if(!configured()){
+    toast("Add your JSONBin keys to sync — see instructions");
+  }
+  /* pull spouse's updates every 20s */
+  setInterval(refresh, 20000);
+  /* also refresh when the tab regains focus */
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) refresh(); });
+})();
+</script>
+</body>
+</html>
