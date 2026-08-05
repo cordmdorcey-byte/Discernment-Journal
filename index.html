@@ -84,6 +84,23 @@ const SEED = [
 /* ---------- who am I (per device) ---------- */
 let ME = localStorage.getItem("discern:me") || null;
 function setMe(n){ ME = n; localStorage.setItem("discern:me", n); }
+function clearMe(){ ME = null; localStorage.removeItem("discern:me"); VIEW = { name:"home" }; render(); }
+
+/* ---------- keyword extraction for mood boards ---------- */
+const STOPWORDS = new Set(("a an and are as at be but by for from has have i if in is it its of on or "+
+  "our so that the their them there they this to too very was we were what when where which who will "+
+  "with you your me my mine ours us he she his her been being do does did not no yes here how than then "+
+  "into out up down over under just about like really quite lot more most some any all can could would "+
+  "should had having get got much many also because while though even still yet only own same such").split(" "));
+/* pull notable words/short phrases from a note sentence */
+function keywordsFrom(note){
+  if(!note) return [];
+  return note.toLowerCase()
+    .replace(/[^a-z0-9\s'-]/g," ")
+    .split(/\s+/)
+    .map(w=>w.replace(/^['-]+|['-]+$/g,""))
+    .filter(w=>w.length>2 && !STOPWORDS.has(w));
+}
 
 /* ---------- cloud storage (JSONBin) ---------- */
 const BASE = "https://api.jsonbin.io/v3/b/" + BIN_ID;
@@ -92,8 +109,23 @@ const configured = () => BIN_ID && !BIN_ID.includes("PASTE") && API_KEY && !API_
 let STATE = null;
 let saveTimer = null;
 
-function blankPlace(loc){ return { ...loc, scores:{}, entries:[], board:[] }; }
-function freshState(){ return { places: SEED.map(blankPlace), board: [] }; }
+function blankPlace(loc){ return { ...loc, scores:{}, photos:[] }; }
+function freshState(){ return { places: SEED.map(blankPlace) }; }
+
+/* migrate older shapes: entries->photos, drop global board */
+function migrate(s){
+  if(!s || !Array.isArray(s.places)) return s;
+  s.places.forEach(p=>{
+    if(!Array.isArray(p.photos)) p.photos = [];
+    if(Array.isArray(p.entries)){
+      p.entries.forEach(e=>{ if(e.image) p.photos.push({ id:e.id||String(Math.random()), image:e.image, author:e.author||"", createdAt:e.createdAt||Date.now() }); });
+      delete p.entries;
+    }
+    if("board" in p) delete p.board;
+  });
+  if("board" in s) delete s.board;
+  return s;
+}
 
 function toast(msg){
   const s = document.getElementById("status");
@@ -110,8 +142,7 @@ async function loadCloud(){
     const rec = j.record;
     // Use saved data only if it actually has places; otherwise seed the cities.
     if(rec && Array.isArray(rec.places) && rec.places.length > 0){
-      STATE = rec;
-      if(!Array.isArray(STATE.board)) STATE.board = [];
+      STATE = migrate(rec);
     } else {
       STATE = freshState();
       await pushCloud();   // write the seeded cities back so both devices share them
@@ -138,12 +169,11 @@ async function pushCloud(){
 /* debounced save so rapid taps don't spam the API */
 function save(){ clearTimeout(saveTimer); saveTimer = setTimeout(pushCloud, 700); }
 
-/* True while the user is mid-edit: a field is focused, or a story draft is unsaved. */
-let composerDraft = false;   // set by the composer when text/photo is entered
+/* True while the user is mid-edit: a text field (e.g. a rating note) is focused.
+   Keeps the background refresh from rebuilding the page and ejecting the cursor. */
 function isEditing(){
   const a = document.activeElement;
-  const focused = a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT");
-  return focused || composerDraft;
+  return !!(a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT"));
 }
 
 /* pull fresh data periodically so spouses see each other's work */
@@ -157,8 +187,7 @@ async function refresh(){
     if(j.record && Array.isArray(j.record.places) && j.record.places.length > 0){
       // Re-check right before we replace the page — a field may have been focused during the fetch.
       if(isEditing()) return;
-      STATE = j.record;
-      if(!Array.isArray(STATE.board)) STATE.board = [];
+      STATE = migrate(j.record);
       render();
     }
   }catch(e){/* ignore */}
@@ -196,15 +225,32 @@ function placeAvg(p, gated){
   return vals.reduce((a,b)=>a+b,0)/vals.length;
 }
 
+/* Pool keywords for a location's mood board from both spouses' metric notes.
+   Anchoring rule: a spouse's words for a metric are hidden until ME has rated that metric.
+   Returns [{word, weight}] sorted by how often the word recurs. */
+function boardKeywords(p){
+  const counts = new Map();
+  const other = PEOPLE.find(n=>n!==ME);
+  CRITERIA.forEach(c=>{
+    const iRated = p.scores?.[c.key]?.[ME]?.value > 0;
+    // my own note always counts
+    keywordsFrom(p.scores?.[c.key]?.[ME]?.note).forEach(w=>counts.set(w,(counts.get(w)||0)+1));
+    // spouse's note only once I've rated this metric
+    if(iRated) keywordsFrom(p.scores?.[c.key]?.[other]?.note).forEach(w=>counts.set(w,(counts.get(w)||0)+1));
+  });
+  return [...counts.entries()]
+    .map(([word,weight])=>({word,weight}))
+    .sort((a,b)=> b.weight-a.weight || a.word.localeCompare(b.word));
+}
+
 /* ---------- views ---------- */
 let VIEW = { name:"home" };
-let dragId = null;
 
 function frame(){
   return el("div",{style:{padding:"36px 0 24px",borderBottom:"1.5px solid var(--line)"}},
     el("div",{class:"script",style:{color:"var(--clay)",fontSize:"22px",fontWeight:"600"}}, "Our Discernment"),
     el("p",{class:"script",style:{fontSize:"32px",lineHeight:"1.3",margin:"6px 0 0",color:"var(--sageDeep)"}}, "\u201C"+MISSION+"\u201D"),
-    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",marginTop:"10px",fontStyle:"italic"}}, "Every score and story below is weighed against this end."),
+    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",marginTop:"10px",fontStyle:"italic"}}, "Every score and image below is weighed against this end."),
   );
 }
 
@@ -241,11 +287,7 @@ function home(){
     el("nav",{style:{display:"flex",gap:"18px",padding:"18px 0",fontSize:"14px",alignItems:"center"}},
       el("span",{class:"navbtn active"}, "Places"),
       el("button",{class:"navbtn",onClick:()=>{VIEW={name:"compare"};render();}}, "At a glance"),
-      el("button",{class:"navbtn",onClick:()=>{VIEW={name:"board"};render();}}, "Story board"),
-      el("span",{style:{marginLeft:"auto",fontSize:"12.5px",color:"var(--sage)"}},
-        "You are "+ME+" ",
-        el("button",{class:"linkbtn",style:{fontSize:"12px"},onClick:()=>{localStorage.removeItem("discern:me");render();}}, "· switch")
-      )
+      el("button",{class:"navbtn",onClick:()=>{VIEW={name:"boards"};render();}}, "Mood board")
     ),
     el("div",{style:{display:"grid",gap:"16px",marginTop:"6px"}},
       ...ranked.map(p=>{
@@ -257,7 +299,7 @@ function home(){
             el("div",{class:"script",style:{fontSize:"34px",lineHeight:"1",color:"var(--ink)"}}, p.name),
             el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, p.region),
             el("div",{style:{fontSize:"12.5px",color:"var(--sage)",marginTop:"8px"}},
-              p.entries.length+" "+(p.entries.length===1?"story":"stories")+" · you've rated "+rated+"/8"),
+              p.photos.length+" "+(p.photos.length===1?"photo":"photos")+" · you've rated "+rated+"/8"),
           ),
           el("div",{style:{textAlign:"center"}},
             el("div",{class:"serif",style:{fontSize:"40px",lineHeight:"1",color:a?"var(--sage)":"var(--line)"}}, a?a.toFixed(1):"—"),
@@ -265,7 +307,17 @@ function home(){
           )
         );
       })
-    )
+    ),
+    switchBar()
+  );
+}
+
+/* bottom-of-page identity + switch control */
+function switchBar(){
+  return el("div",{style:{marginTop:"40px",paddingTop:"20px",borderTop:"1px solid var(--line)",textAlign:"center"}},
+    el("div",{style:{fontSize:"13px",color:"var(--inkSoft)"}}, "Signed in as ",
+      el("b",{style:{color:"var(--sageDeep)",fontWeight:"600"}}, ME)),
+    el("button",{class:"whopill",style:{marginTop:"10px"},onClick:clearMe}, "Switch spouse")
   );
 }
 
@@ -322,42 +374,25 @@ function scaleRow(p, crit){
   );
 }
 
-function composer(p){
-  let img = null;
-  composerDraft = false;   // fresh composer starts clean
-  const updateDraft = ()=>{ composerDraft = !!(ta.value.trim() || img); };
-  const ta = el("textarea",{rows:"3",placeholder:"What did you notice here? An impression, a conversation, a moment at Mass…",
-    style:{width:"100%",resize:"vertical",border:"none",background:"transparent",fontSize:"15px",lineHeight:"1.5",color:"var(--ink)",outline:"none"}});
-  ta.addEventListener("input", updateDraft);
-  const preview = el("div",{style:{marginTop:"8px"}});
+function photoUploader(p){
   const fileInput = el("input",{type:"file",accept:"image/*",style:{display:"none"}});
   fileInput.addEventListener("change", e=>{
-    const f = e.target.files?.[0]; if(!f) return;
-    const rd = new FileReader();
-    rd.onload = ()=>{ img = rd.result; updateDraft(); preview.innerHTML="";
-      const wrap = el("div",{style:{position:"relative",display:"inline-block"}},
-        el("img",{src:img,style:{maxHeight:"140px",borderRadius:"8px",display:"block"}}),
-        el("button",{style:{position:"absolute",top:"6px",right:"6px",background:"var(--ink)",color:"var(--paper)",border:"none",borderRadius:"999px",width:"24px",height:"24px"},
-          onClick:()=>{img=null;updateDraft();preview.innerHTML="";}}, "✕"));
-      preview.append(wrap);
-    };
-    rd.readAsDataURL(f);
+    const files = Array.from(e.target.files||[]);
+    if(!files.length) return;
+    let pending = files.length;
+    files.forEach(f=>{
+      const rd = new FileReader();
+      rd.onload = ()=>{
+        p.photos.unshift({ id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()), image:rd.result, author:ME, createdAt:Date.now() });
+        if(--pending===0){ save(); render(); }
+      };
+      rd.readAsDataURL(f);
+    });
   });
 
-  const submit = ()=>{
-    const text = ta.value.trim();
-    if(!text && !img) return;
-    composerDraft = false;   // draft is being committed
-    p.entries.unshift({ id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())), text, image:img, author:ME, createdAt:Date.now() });
-    save(); render();
-  };
-
-  return el("div",{class:"card",style:{padding:"14px"}},
-    ta, preview,
-    el("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:"10px"}},
-      el("label",{class:"linkbtn",style:{display:"inline-flex",alignItems:"center",gap:"6px",cursor:"pointer"}}, "▣ Add picture", fileInput),
-      el("button",{class:"primary",onClick:submit}, "＋ Save story")
-    )
+  return el("div",{class:"card",style:{padding:"16px",display:"flex",flexDirection:"column",alignItems:"center",gap:"8px",textAlign:"center"}},
+    el("label",{class:"primary",style:{display:"inline-flex",alignItems:"center",gap:"8px",cursor:"pointer"}}, "▣ Add photos to the board", fileInput),
+    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic"}}, "Pictures you add join "+p.name+"'s mood board.")
   );
 }
 
@@ -372,31 +407,19 @@ function placeView(){
       el("div",{style:{fontSize:"12.5px",color:"var(--sageDeep)",fontStyle:"italic",marginTop:"14px"}}, "Held against: "+MISSION.toLowerCase())
     ),
     sectionLabel("How it feels, 1 to 7"),
-    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"2px",marginBottom:"4px"}}, "You're writing as "+ME+"."),
+    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"2px",marginBottom:"4px"}}, "You're writing as "+ME+". Your notes become keywords on the mood board."),
     ...CRITERIA.map(c=>scaleRow(p,c)),
-    sectionLabel("Stories & impressions"),
-    composer(p),
-    el("div",{style:{display:"grid",gap:"14px",marginTop:"18px"}},
-      p.entries.length===0 ? el("div",{style:{color:"var(--inkSoft)",fontSize:"14px",fontStyle:"italic"}}, "No stories yet. Write what you saw, felt, or heard on a visit.") : null,
-      ...p.entries.map(e=>{
-        const onBoard = STATE.board.some(b=>b.entryId===e.id);
-        return el("article",{class:"card",style:{overflow:"hidden"}},
-          e.image ? el("img",{src:e.image,alt:"",style:{width:"100%",maxHeight:"260px",objectFit:"cover",display:"block"}}) : null,
-          el("div",{style:{padding:"14px 16px"}},
-            el("div",{style:{fontSize:"11px",letterSpacing:"1.5px",textTransform:"uppercase",color:"var(--sage)",fontWeight:"600",marginBottom:"6px"}}, (e.author||"—")+"'s note"),
-            el("p",{style:{margin:"0",fontSize:"15px",lineHeight:"1.55"}}, e.text),
-            el("div",{style:{display:"flex",gap:"14px",marginTop:"12px"}},
-              el("button",{class:"linkbtn",onClick:()=>{ if(!onBoard){STATE.board.push({entryId:e.id,placeId:p.id});save();render();} }},
-                onBoard?"✓ On board":"＋ Add to board"),
-              el("button",{class:"linkbtn",style:{color:"var(--sageDeep)"},onClick:()=>{
-                p.entries=p.entries.filter(x=>x.id!==e.id);
-                STATE.board=STATE.board.filter(b=>b.entryId!==e.id);
-                save();render();
-              }}, "🗑 Remove")
-            )
-          )
-        );
-      })
+    sectionLabel("Mood board"),
+    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"2px",marginBottom:"10px"}}, "Photos and words from both of you, gathered into one emotional picture of "+p.name+"."),
+    photoUploader(p),
+    el("button",{class:"card",style:{marginTop:"14px",width:"100%",textAlign:"left",padding:"18px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"12px",cursor:"pointer"},
+      onClick:()=>{VIEW={name:"mood",id:p.id};render();}},
+      el("div",{},
+        el("div",{class:"script",style:{fontSize:"26px",color:"var(--sageDeep)"}}, "Open "+p.name+"'s board"),
+        el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",marginTop:"2px"}},
+          p.photos.length+" "+(p.photos.length===1?"photo":"photos")+" · "+boardKeywords(p).length+" words")
+      ),
+      el("span",{style:{fontSize:"22px",color:"var(--sage)"}}, "›")
     )
   );
 }
@@ -440,47 +463,80 @@ function compareView(){
   );
 }
 
-function boardView(){
+function boardsListView(){
   const root=document.getElementById("root"); root.innerHTML="";
-  const cards = STATE.board.map(b=>{
-    const p=place(b.placeId); const e=p&&p.entries.find(x=>x.id===b.entryId);
-    return e?{...e,place:p}:null;
-  }).filter(Boolean);
-
-  const list = el("div",{style:{display:"grid",gap:"14px",marginTop:"20px"}});
-  if(cards.length===0){
-    list.append(el("div",{style:{marginTop:"10px",color:"var(--inkSoft)",fontStyle:"italic"}},
-      "The board is empty. Open a place and tap \u201CAdd to board\u201D on a story to begin building the narrative."));
-  }
-  cards.forEach(c=>{
-    const cardEl = el("div",{class:"card",draggable:"true",style:{display:"flex",gap:"12px",padding:"12px",alignItems:"flex-start",cursor:"grab"}},
-      el("span",{style:{color:"var(--inkSoft)",marginTop:"2px",flexShrink:"0"}}, "⠿"),
-      c.image?el("img",{src:c.image,alt:"",style:{width:"84px",height:"84px",objectFit:"cover",borderRadius:"8px",flexShrink:"0"}}):null,
-      el("div",{style:{flex:"1",minWidth:"0"}},
-        el("div",{style:{fontSize:"11px",letterSpacing:"1.5px",textTransform:"uppercase",color:"var(--sage)",fontWeight:"600"}}, c.place.name+", "+c.place.region+" · "+(c.author||"")),
-        el("p",{style:{margin:"5px 0 0",fontSize:"14px",lineHeight:"1.5"}}, c.text)),
-      el("button",{class:"linkbtn",style:{flexShrink:"0"},onClick:()=>{STATE.board=STATE.board.filter(b=>b.entryId!==c.id);save();render();}}, "✕")
-    );
-    cardEl.addEventListener("dragstart",()=>dragId=c.id);
-    cardEl.addEventListener("dragover",e=>e.preventDefault());
-    cardEl.addEventListener("drop",()=>{
-      if(dragId&&dragId!==c.id){
-        const arr=STATE.board;
-        const from=arr.findIndex(b=>b.entryId===dragId);
-        const to=arr.findIndex(b=>b.entryId===c.id);
-        const [m]=arr.splice(from,1); arr.splice(to,0,m); save(); render();
-      }
-      dragId=null;
-    });
-    list.append(cardEl);
-  });
-
   root.append(
     backBar(),
     el("div",{style:{padding:"8px 0 18px",borderBottom:"1.5px solid var(--line)"}},
-      el("div",{class:"script",style:{fontSize:"46px",color:"var(--sageDeep)"}}, "Story Board"),
-      el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, "Drag to arrange the narrative. Add pieces from any place.")),
-    list
+      el("div",{class:"script",style:{fontSize:"46px",color:"var(--sageDeep)"}}, "Mood Boards"),
+      el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, "The feel of each place, at a glance. Tap one to open its board.")),
+    el("div",{style:{display:"grid",gap:"16px",marginTop:"20px"}},
+      ...STATE.places.map(p=>{
+        const words = boardKeywords(p);
+        const preview = words.slice(0,5).map(w=>w.word).join(" · ");
+        const thumb = p.photos[0];
+        return el("button",{class:"card",style:{textAlign:"left",padding:"0",display:"flex",alignItems:"stretch",gap:"0",overflow:"hidden",cursor:"pointer"},
+          onClick:()=>{VIEW={name:"mood",id:p.id};render();}},
+          thumb
+            ? el("img",{src:thumb.image,alt:"",style:{width:"96px",objectFit:"cover",flexShrink:"0"}})
+            : el("div",{style:{width:"96px",flexShrink:"0",background:"var(--paperDeep)",display:"grid",placeItems:"center",color:"var(--line)",fontSize:"24px"}}, "▣"),
+          el("div",{style:{padding:"16px 18px",flex:"1",minWidth:"0"}},
+            el("div",{class:"script",style:{fontSize:"30px",lineHeight:"1",color:"var(--ink)"}}, p.name),
+            el("div",{style:{fontSize:"12px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"1px"}}, p.region),
+            el("div",{style:{fontSize:"12.5px",color:"var(--sage)",marginTop:"8px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+              preview || (p.photos.length? p.photos.length+" photos" : "Empty so far")),
+          ),
+          el("span",{style:{alignSelf:"center",paddingRight:"16px",fontSize:"22px",color:"var(--sage)"}}, "›")
+        );
+      })
+    ),
+    switchBar()
+  );
+}
+
+function moodView(){
+  const p = place(VIEW.id);
+  const root=document.getElementById("root"); root.innerHTML="";
+  const words = boardKeywords(p);
+  const maxW = words.length ? words[0].weight : 1;
+
+  // keyword cloud — size and depth scale with recurrence
+  const cloud = el("div",{style:{display:"flex",flexWrap:"wrap",gap:"8px 10px",alignItems:"center",margin:"4px 0 22px"}});
+  if(words.length===0){
+    cloud.append(el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",fontStyle:"italic"}},
+      "No words yet. Add notes to the ratings and they'll gather here."));
+  }
+  words.forEach(({word,weight})=>{
+    const t = weight/maxW;                         // 0..1
+    const size = 15 + Math.round(t*17);            // 15–32px
+    const col = t>0.66? "var(--sageDeep)" : t>0.33? "var(--sage)" : "var(--clay)";
+    cloud.append(el("span",{class:"script",style:{fontSize:size+"px",lineHeight:"1",color:col,fontWeight: t>0.5?"700":"600"}}, word));
+  });
+
+  // photo mosaic
+  const grid = el("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"6px"}});
+  if(p.photos.length===0){
+    grid.append(el("div",{style:{gridColumn:"1 / -1",padding:"30px",textAlign:"center",color:"var(--inkSoft)",fontStyle:"italic",fontSize:"14px",border:"1px dashed var(--line)",borderRadius:"10px"}},
+      "No photos yet. Add a few to see "+p.name+" take shape."));
+  }
+  p.photos.forEach(ph=>{
+    const cell = el("div",{style:{position:"relative",aspectRatio:"1",overflow:"hidden",borderRadius:"8px"}},
+      el("img",{src:ph.image,alt:"",style:{width:"100%",height:"100%",objectFit:"cover",display:"block"}}),
+      el("button",{"aria-label":"Remove photo",style:{position:"absolute",top:"4px",right:"4px",background:"rgba(58,54,43,.72)",color:"var(--paper)",border:"none",borderRadius:"999px",width:"22px",height:"22px",fontSize:"12px",lineHeight:"1",cursor:"pointer"},
+        onClick:()=>{ p.photos = p.photos.filter(x=>x.id!==ph.id); save(); render(); }}, "✕")
+    );
+    grid.append(cell);
+  });
+
+  root.append(
+    el("button",{class:"navbtn",style:{display:"flex",alignItems:"center",gap:"5px",padding:"22px 0 4px",color:"var(--sage)",fontWeight:"600"},
+      onClick:()=>{VIEW={name:"place",id:p.id};render();}}, "‹ Back to "+p.name),
+    el("div",{style:{padding:"8px 0 18px",borderBottom:"1.5px solid var(--line)"}},
+      el("div",{class:"script",style:{fontSize:"48px",color:"var(--sageDeep)",lineHeight:"1"}}, p.name),
+      el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, "The feel of the place, at a glance — from both of you.")),
+    el("div",{style:{marginTop:"20px"}}, cloud),
+    photoUploader(p),
+    el("div",{style:{marginTop:"16px"}}, grid)
   );
 }
 
@@ -491,7 +547,8 @@ function render(){
   if(VIEW.name==="home") home();
   else if(VIEW.name==="place") placeView();
   else if(VIEW.name==="compare") compareView();
-  else if(VIEW.name==="board") boardView();
+  else if(VIEW.name==="boards") boardsListView();
+  else if(VIEW.name==="mood") moodView();
 }
 
 /* ---------- boot ---------- */
