@@ -79,6 +79,7 @@ const SEED = [
   { id:"boise", name:"Boise", region:"Idaho" },
   { id:"greenville-sc", name:"Greenville", region:"South Carolina" },
   { id:"greenville-tx", name:"Greenville", region:"Texas" },
+  { id:"pasadena-ca", name:"Pasadena", region:"California" },
 ];
 
 /* ---------- who am I (per device) ---------- */
@@ -86,20 +87,15 @@ let ME = localStorage.getItem("discern:me") || null;
 function setMe(n){ ME = n; localStorage.setItem("discern:me", n); }
 function clearMe(){ ME = null; localStorage.removeItem("discern:me"); VIEW = { name:"home" }; render(); }
 
-/* ---------- keyword extraction for mood boards ---------- */
-const STOPWORDS = new Set(("a an and are as at be but by for from has have i if in is it its of on or "+
-  "our so that the their them there they this to too very was we were what when where which who will "+
-  "with you your me my mine ours us he she his her been being do does did not no yes here how than then "+
-  "into out up down over under just about like really quite lot more most some any all can could would "+
-  "should had having get got much many also because while though even still yet only own same such").split(" "));
-/* pull notable words/short phrases from a note sentence */
-function keywordsFrom(note){
+/* ---------- phrase extraction for the word map ---------- */
+/* Split a note into short phrases at commas, semicolons, and the word "and".
+   Keeps multi-word phrases intact; trims filler and very long fragments. */
+function phrasesFrom(note){
   if(!note) return [];
-  return note.toLowerCase()
-    .replace(/[^a-z0-9\s'-]/g," ")
-    .split(/\s+/)
-    .map(w=>w.replace(/^['-]+|['-]+$/g,""))
-    .filter(w=>w.length>2 && !STOPWORDS.has(w));
+  return note
+    .split(/[,;]|\band\b|\n|\u2014|\u2013| - /i)
+    .map(s => s.trim().toLowerCase().replace(/^[^a-z0-9]+|[^a-z0-9]+$/g,""))
+    .filter(s => s.length >= 3 && s.split(/\s+/).length <= 6);
 }
 
 /* ---------- cloud storage (JSONBin) ---------- */
@@ -109,21 +105,25 @@ const configured = () => BIN_ID && !BIN_ID.includes("PASTE") && API_KEY && !API_
 let STATE = null;
 let saveTimer = null;
 
-function blankPlace(loc){ return { ...loc, scores:{}, photos:[] }; }
+function blankPlace(loc){ return { ...loc, scores:{} }; }
 function freshState(){ return { places: SEED.map(blankPlace) }; }
 
-/* migrate older shapes: entries->photos, drop global board */
+/* migrate older shapes: drop photos, entries, and global board.
+   Also backfill any SEED locations not yet present (so newly added places
+   like Pasadena appear even though the bin already has data). */
 function migrate(s){
   if(!s || !Array.isArray(s.places)) return s;
   s.places.forEach(p=>{
-    if(!Array.isArray(p.photos)) p.photos = [];
-    if(Array.isArray(p.entries)){
-      p.entries.forEach(e=>{ if(e.image) p.photos.push({ id:e.id||String(Math.random()), image:e.image, author:e.author||"", createdAt:e.createdAt||Date.now() }); });
-      delete p.entries;
-    }
+    if("photos" in p) delete p.photos;
+    if("entries" in p) delete p.entries;
     if("board" in p) delete p.board;
   });
   if("board" in s) delete s.board;
+  let added = false;
+  SEED.forEach(loc=>{
+    if(!s.places.some(p=>p.id===loc.id)){ s.places.push(blankPlace(loc)); added = true; }
+  });
+  if(added) setTimeout(pushCloud, 0);   // persist the new place(s) back to the shared bin
   return s;
 }
 
@@ -163,7 +163,7 @@ async function pushCloud(){
     });
     if(!r.ok) throw new Error(r.status);
     toast("Saved");
-  }catch(e){ console.error(e); toast("Couldn't save — the key may be read-only"); }
+  }catch(e){ console.error(e); toast("Couldn't save — check your connection"); }
 }
 
 /* debounced save so rapid taps don't spam the API */
@@ -225,22 +225,37 @@ function placeAvg(p, gated){
   return vals.reduce((a,b)=>a+b,0)/vals.length;
 }
 
-/* Pool keywords for a location's mood board from both spouses' metric notes.
-   Anchoring rule: a spouse's words for a metric are hidden until ME has rated that metric.
-   Returns [{word, weight}] sorted by how often the word recurs. */
-function boardKeywords(p){
-  const counts = new Map();
+/* Pool phrases for a location's word map from both spouses' metric notes.
+   Anchoring rule: a spouse's phrases for a metric are hidden until ME has rated that metric.
+   Weight blends recurrence (how often a phrase appears) with the metric's rating
+   (phrases tied to highly-rated metrics grow larger).
+   Returns [{phrase, weight}] sorted by weight. */
+function boardPhrases(p){
+  const acc = new Map();   // phrase -> {count, ratingSum}
   const other = PEOPLE.find(n=>n!==ME);
+  const add = (phrase, rating)=>{
+    const cur = acc.get(phrase) || {count:0, ratingSum:0};
+    cur.count += 1;
+    cur.ratingSum += (rating||4);   // default mid if somehow unrated
+    acc.set(phrase, cur);
+  };
   CRITERIA.forEach(c=>{
-    const iRated = p.scores?.[c.key]?.[ME]?.value > 0;
-    // my own note always counts
-    keywordsFrom(p.scores?.[c.key]?.[ME]?.note).forEach(w=>counts.set(w,(counts.get(w)||0)+1));
-    // spouse's note only once I've rated this metric
-    if(iRated) keywordsFrom(p.scores?.[c.key]?.[other]?.note).forEach(w=>counts.set(w,(counts.get(w)||0)+1));
+    const myVal = p.scores?.[c.key]?.[ME]?.value || 0;
+    const iRated = myVal > 0;
+    phrasesFrom(p.scores?.[c.key]?.[ME]?.note).forEach(ph=>add(ph, myVal));
+    if(iRated){
+      const theirVal = p.scores?.[c.key]?.[other]?.value || 0;
+      phrasesFrom(p.scores?.[c.key]?.[other]?.note).forEach(ph=>add(ph, theirVal));
+    }
   });
-  return [...counts.entries()]
-    .map(([word,weight])=>({word,weight}))
-    .sort((a,b)=> b.weight-a.weight || a.word.localeCompare(b.word));
+  return [...acc.entries()]
+    .map(([phrase,{count,ratingSum}])=>{
+      const avgRating = ratingSum/count;          // 1..7
+      // weight: recurrence is the main driver; rating nudges it up to ~1.5x
+      const weight = count * (0.6 + 0.4*(avgRating/7) + 0.15*(avgRating>=6?1:0));
+      return { phrase, weight, count };
+    })
+    .sort((a,b)=> b.weight-a.weight || a.phrase.localeCompare(b.phrase));
 }
 
 /* ---------- views ---------- */
@@ -299,7 +314,7 @@ function home(){
             el("div",{class:"script",style:{fontSize:"34px",lineHeight:"1",color:"var(--ink)"}}, p.name),
             el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, p.region),
             el("div",{style:{fontSize:"12.5px",color:"var(--sage)",marginTop:"8px"}},
-              p.photos.length+" "+(p.photos.length===1?"photo":"photos")+" · you've rated "+rated+"/8"),
+              boardPhrases(p).length+" "+(boardPhrases(p).length===1?"phrase":"phrases")+" · you've rated "+rated+"/8"),
           ),
           el("div",{style:{textAlign:"center"}},
             el("div",{class:"serif",style:{fontSize:"40px",lineHeight:"1",color:a?"var(--sage)":"var(--line)"}}, a?a.toFixed(1):"—"),
@@ -374,28 +389,6 @@ function scaleRow(p, crit){
   );
 }
 
-function photoUploader(p){
-  const fileInput = el("input",{type:"file",accept:"image/*",style:{display:"none"}});
-  fileInput.addEventListener("change", e=>{
-    const files = Array.from(e.target.files||[]);
-    if(!files.length) return;
-    let pending = files.length;
-    files.forEach(f=>{
-      const rd = new FileReader();
-      rd.onload = ()=>{
-        p.photos.unshift({ id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()), image:rd.result, author:ME, createdAt:Date.now() });
-        if(--pending===0){ save(); render(); }
-      };
-      rd.readAsDataURL(f);
-    });
-  });
-
-  return el("div",{class:"card",style:{padding:"16px",display:"flex",flexDirection:"column",alignItems:"center",gap:"8px",textAlign:"center"}},
-    el("label",{class:"primary",style:{display:"inline-flex",alignItems:"center",gap:"8px",cursor:"pointer"}}, "▣ Add photos to the board", fileInput),
-    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic"}}, "Pictures you add join "+p.name+"'s mood board.")
-  );
-}
-
 function placeView(){
   const p = place(VIEW.id);
   const root = document.getElementById("root"); root.innerHTML="";
@@ -407,17 +400,16 @@ function placeView(){
       el("div",{style:{fontSize:"12.5px",color:"var(--sageDeep)",fontStyle:"italic",marginTop:"14px"}}, "Held against: "+MISSION.toLowerCase())
     ),
     sectionLabel("How it feels, 1 to 7"),
-    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"2px",marginBottom:"4px"}}, "You're writing as "+ME+". Your notes become keywords on the mood board."),
+    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"2px",marginBottom:"4px"}}, "You're writing as "+ME+". Your notes become the words on the mood board."),
     ...CRITERIA.map(c=>scaleRow(p,c)),
     sectionLabel("Mood board"),
-    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"2px",marginBottom:"10px"}}, "Photos and words from both of you, gathered into one emotional picture of "+p.name+"."),
-    photoUploader(p),
-    el("button",{class:"card",style:{marginTop:"14px",width:"100%",textAlign:"left",padding:"18px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"12px",cursor:"pointer"},
+    el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"2px",marginBottom:"10px"}}, "The words from both of your notes, gathered into one feel for "+p.name+"."),
+    el("button",{class:"card",style:{width:"100%",textAlign:"left",padding:"18px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"12px",cursor:"pointer"},
       onClick:()=>{VIEW={name:"mood",id:p.id};render();}},
       el("div",{},
-        el("div",{class:"script",style:{fontSize:"26px",color:"var(--sageDeep)"}}, "Open "+p.name+"'s board"),
+        el("div",{class:"script",style:{fontSize:"26px",color:"var(--sageDeep)"}}, "Open "+p.name+"'s word map"),
         el("div",{style:{fontSize:"12.5px",color:"var(--inkSoft)",marginTop:"2px"}},
-          p.photos.length+" "+(p.photos.length===1?"photo":"photos")+" · "+boardKeywords(p).length+" words")
+          boardPhrases(p).length+" "+(boardPhrases(p).length===1?"phrase":"phrases")+" so far")
       ),
       el("span",{style:{fontSize:"22px",color:"var(--sage)"}}, "›")
     )
@@ -472,21 +464,17 @@ function boardsListView(){
       el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, "The feel of each place, at a glance. Tap one to open its board.")),
     el("div",{style:{display:"grid",gap:"16px",marginTop:"20px"}},
       ...STATE.places.map(p=>{
-        const words = boardKeywords(p);
-        const preview = words.slice(0,5).map(w=>w.word).join(" · ");
-        const thumb = p.photos[0];
-        return el("button",{class:"card",style:{textAlign:"left",padding:"0",display:"flex",alignItems:"stretch",gap:"0",overflow:"hidden",cursor:"pointer"},
+        const phrases = boardPhrases(p);
+        const preview = phrases.slice(0,4).map(w=>w.phrase).join(" · ");
+        return el("button",{class:"card",style:{textAlign:"left",padding:"18px 20px",display:"flex",alignItems:"center",gap:"12px",cursor:"pointer"},
           onClick:()=>{VIEW={name:"mood",id:p.id};render();}},
-          thumb
-            ? el("img",{src:thumb.image,alt:"",style:{width:"96px",objectFit:"cover",flexShrink:"0"}})
-            : el("div",{style:{width:"96px",flexShrink:"0",background:"var(--paperDeep)",display:"grid",placeItems:"center",color:"var(--line)",fontSize:"24px"}}, "▣"),
-          el("div",{style:{padding:"16px 18px",flex:"1",minWidth:"0"}},
+          el("div",{style:{flex:"1",minWidth:"0"}},
             el("div",{class:"script",style:{fontSize:"30px",lineHeight:"1",color:"var(--ink)"}}, p.name),
             el("div",{style:{fontSize:"12px",color:"var(--inkSoft)",fontStyle:"italic",marginTop:"1px"}}, p.region),
             el("div",{style:{fontSize:"12.5px",color:"var(--sage)",marginTop:"8px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
-              preview || (p.photos.length? p.photos.length+" photos" : "Empty so far")),
+              preview || "No words yet"),
           ),
-          el("span",{style:{alignSelf:"center",paddingRight:"16px",fontSize:"22px",color:"var(--sage)"}}, "›")
+          el("span",{style:{alignSelf:"center",fontSize:"22px",color:"var(--sage)"}}, "›")
         );
       })
     ),
@@ -497,46 +485,39 @@ function boardsListView(){
 function moodView(){
   const p = place(VIEW.id);
   const root=document.getElementById("root"); root.innerHTML="";
-  const words = boardKeywords(p);
-  const maxW = words.length ? words[0].weight : 1;
+  const phrases = boardPhrases(p);
+  const maxW = phrases.length ? phrases[0].weight : 1;
+  const minW = phrases.length ? phrases[phrases.length-1].weight : 1;
+  const span = Math.max(0.0001, maxW - minW);
 
-  // keyword cloud — size and depth scale with recurrence
-  const cloud = el("div",{style:{display:"flex",flexWrap:"wrap",gap:"8px 10px",alignItems:"center",margin:"4px 0 22px"}});
-  if(words.length===0){
-    cloud.append(el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",fontStyle:"italic"}},
-      "No words yet. Add notes to the ratings and they'll gather here."));
+  // Word map: phrase size scales with weight. Interleave big/small so it reads
+  // like a scattered map rather than a strict descending list.
+  const map = el("div",{style:{display:"flex",flexWrap:"wrap",gap:"10px 16px",alignItems:"baseline",justifyContent:"center",lineHeight:"1.15",padding:"10px 0 4px"}});
+  if(phrases.length===0){
+    map.append(el("div",{style:{fontSize:"14px",color:"var(--inkSoft)",fontStyle:"italic",textAlign:"center",padding:"30px 0"}},
+      "No words yet. Add notes to "+p.name+"'s ratings — commas and \u201Cand\u201D split them into phrases that gather here."));
   }
-  words.forEach(({word,weight})=>{
-    const t = weight/maxW;                         // 0..1
-    const size = 15 + Math.round(t*17);            // 15–32px
+  // reorder: alternate from the largest and smallest ends toward the middle
+  const ordered = [];
+  let lo = 0, hi = phrases.length - 1;
+  while(lo <= hi){ ordered.push(phrases[lo++]); if(lo<=hi) ordered.push(phrases[hi--]); }
+  ordered.forEach(({phrase,weight})=>{
+    const t = (weight - minW) / span;              // 0..1
+    const size = 16 + Math.round(t*30);            // 16–46px
     const col = t>0.66? "var(--sageDeep)" : t>0.33? "var(--sage)" : "var(--clay)";
-    cloud.append(el("span",{class:"script",style:{fontSize:size+"px",lineHeight:"1",color:col,fontWeight: t>0.5?"700":"600"}}, word));
-  });
-
-  // photo mosaic
-  const grid = el("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"6px"}});
-  if(p.photos.length===0){
-    grid.append(el("div",{style:{gridColumn:"1 / -1",padding:"30px",textAlign:"center",color:"var(--inkSoft)",fontStyle:"italic",fontSize:"14px",border:"1px dashed var(--line)",borderRadius:"10px"}},
-      "No photos yet. Add a few to see "+p.name+" take shape."));
-  }
-  p.photos.forEach(ph=>{
-    const cell = el("div",{style:{position:"relative",aspectRatio:"1",overflow:"hidden",borderRadius:"8px"}},
-      el("img",{src:ph.image,alt:"",style:{width:"100%",height:"100%",objectFit:"cover",display:"block"}}),
-      el("button",{"aria-label":"Remove photo",style:{position:"absolute",top:"4px",right:"4px",background:"rgba(58,54,43,.72)",color:"var(--paper)",border:"none",borderRadius:"999px",width:"22px",height:"22px",fontSize:"12px",lineHeight:"1",cursor:"pointer"},
-        onClick:()=>{ p.photos = p.photos.filter(x=>x.id!==ph.id); save(); render(); }}, "✕")
-    );
-    grid.append(cell);
+    const op = 0.6 + 0.4*t;                         // quieter for lesser-used
+    map.append(el("span",{class:"script",style:{fontSize:size+"px",color:col,fontWeight: t>0.5?"700":"600",opacity:String(op)}}, phrase));
   });
 
   root.append(
     el("button",{class:"navbtn",style:{display:"flex",alignItems:"center",gap:"5px",padding:"22px 0 4px",color:"var(--sage)",fontWeight:"600"},
-      onClick:()=>{VIEW={name:"place",id:p.id};render();}}, "‹ Back to "+p.name),
+      onClick:()=>{VIEW={name:"boards"};render();}}, "‹ All boards"),
     el("div",{style:{padding:"8px 0 18px",borderBottom:"1.5px solid var(--line)"}},
       el("div",{class:"script",style:{fontSize:"48px",color:"var(--sageDeep)",lineHeight:"1"}}, p.name),
-      el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, "The feel of the place, at a glance — from both of you.")),
-    el("div",{style:{marginTop:"20px"}}, cloud),
-    photoUploader(p),
-    el("div",{style:{marginTop:"16px"}}, grid)
+      el("div",{style:{fontSize:"13px",color:"var(--inkSoft)",marginTop:"2px",fontStyle:"italic"}}, "The feel of the place, at a glance — words you've both written, larger the more they recur.")),
+    el("div",{class:"card",style:{marginTop:"20px",padding:"24px 18px"}}, map),
+    el("button",{class:"navbtn",style:{marginTop:"18px",color:"var(--sage)",fontWeight:"600"},
+      onClick:()=>{VIEW={name:"place",id:p.id};render();}}, "Add or edit "+p.name+"'s notes ›")
   );
 }
 
